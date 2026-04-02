@@ -295,9 +295,7 @@ def compute_contacts(top, traj, output, itypes, geom_criterion_values, cores,
 
         contact_worker(inputqueue, resultsqueue)
         resultsqueue.put("DONE")
-        output_fd = open(output, "w")
-        contact_consumer(resultsqueue, output_fd, itypes, beg, end, stride, distout)
-        output_fd.close()
+        contact_consumer(resultsqueue, output, itypes, beg, end, stride, distout)
 
     else:
         # Parallel path: use forkserver/spawn context so VMD C-state is not
@@ -315,16 +313,17 @@ def compute_contacts(top, traj, output, itypes, geom_criterion_values, cores,
         for w in workers:
             w.start()
 
-        output_fd = open(output, "w")
+        # Pass the output *path* (a plain string), not an open file handle.
+        # forkserver/spawn pickle the Process args before sending them to the
+        # child, and open file objects cannot be pickled.
         consumer = ctx.Process(target=contact_consumer,
-                               args=(resultsqueue, output_fd, itypes, beg, end, stride, distout))
+                               args=(resultsqueue, output, itypes, beg, end, stride, distout))
         consumer.start()
 
         for w in workers:
             w.join()
         resultsqueue.put("DONE")
         consumer.join()
-        output_fd.close()
 
 
 
@@ -338,8 +337,12 @@ def contact_worker(inputqueue, resultsqueue):
         resultsqueue.put((frag_idx, contacts))
 
 
-def contact_consumer(resultsqueue, output_fd, itypes, beg, end, stride, distout):
+def contact_consumer(resultsqueue, output, itypes, beg, end, stride, distout):
     import heapq
+
+    # Open the output file here inside the child process — avoids passing an
+    # unpicklable file handle when using forkserver/spawn contexts.
+    output_fd = open(output, "w")
 
     total_frames = math.ceil((end - beg + 1) / stride)
     output_fd.write("# total_frames:%d beg:%d end:%d stride:%d interaction_types:%s\n" %
