@@ -104,7 +104,8 @@ def compute_frame_contacts(molid, frame, itypes, geom_criteria, sele1, sele2,
 
 
 def compute_fragment_contacts(frag_idx, beg_frame, end_frame, top, traj, itypes, geom_criterion_values, stride, distout,
-                              sele1, sele2, sele1_atoms, sele2_atoms, index_to_atom, ligand_anions, ligand_cations, disulfide_cys):
+                              sele1, sele2, sele1_atoms, sele2_atoms, index_to_atom, ligand_anions, ligand_cations, disulfide_cys,
+                              vmd_macros=None):
     """ 
     Reads in a single trajectory fragment and calls compute_frame_contacts on each frame
 
@@ -148,6 +149,14 @@ def compute_fragment_contacts(frag_idx, beg_frame, end_frame, top, traj, itypes,
     fragment_contacts: list of tuples, [(frame_index, atom1_label, atom2_label, itype), ...]
     """
     tic = datetime.datetime.now()
+
+    # Re-apply VMD selection macros (solv/lipid/ligand) that were defined in the
+    # parent process. With forkserver/spawn, each worker starts a fresh VMD
+    # instance and does not inherit the parent's Tcl state.
+    if vmd_macros:
+        for macro_name, macro_defn in vmd_macros.items():
+            evaltcl('atomselect macro %s "%s"' % (macro_name, macro_defn))
+
     molid = load_traj(top, traj, beg_frame, end_frame, stride)
     fragment_contacts = []
 
@@ -230,6 +239,15 @@ def compute_contacts(top, traj, output, itypes, geom_criterion_values, cores,
     configure_lipid(top, traj, lipid_sele)
     configure_ligand(top, traj, ligand_sele, sele1, sele2)
 
+    # Capture the VMD atomselect macro definitions that were just configured so
+    # that forkserver/spawn workers (which start fresh VMD instances) can
+    # re-apply them before computing contacts.
+    vmd_macros = {
+        "solv":   evaltcl("atomselect macro solv"),
+        "lipid":  evaltcl("atomselect macro lipid"),
+        "ligand": evaltcl("atomselect macro ligand"),
+    }
+
     disulfide_cys = find_disulfide(top, traj)
     ligand_anions, ligand_cations = extract_ligand_features(top, traj, index_to_atom)
 
@@ -259,7 +277,7 @@ def compute_contacts(top, traj, output, itypes, geom_criterion_values, cores,
         end_frame = beg_frame + (TRAJ_FRAG_SIZE * stride) - 1
         frag_args.append((frag_idx, beg_frame, end_frame, top, traj, itypes, geom_criterion_values,
                           stride, distout, sele1, sele2, sele1_atoms, sele2_atoms, index_to_atom,
-                          ligand_anions, ligand_cations, disulfide_cys))
+                          ligand_anions, ligand_cations, disulfide_cys, vmd_macros))
 
     num_workers = max(1, cores)
 
